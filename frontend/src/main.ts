@@ -1,4 +1,10 @@
-import { app, BrowserWindow } from "electron";
+import {
+  app,
+  BrowserWindow,
+  session,
+  desktopCapturer,
+  ipcMain,
+} from "electron";
 import path from "node:path";
 import started from "electron-squirrel-startup";
 
@@ -7,13 +13,23 @@ if (started) {
   app.quit();
 }
 
+// Enable screen sharing features for Electron
+app.commandLine.appendSwitch("enable-usermedia-screen-capturing");
+app.commandLine.appendSwitch("allow-http-screen-capture");
+// Force use legacy screen capture to avoid WGC issues
+app.commandLine.appendSwitch("disable-features", "WebRtcUseEchoCanceller3");
+app.commandLine.appendSwitch("force-cpu-draw");
+
 const createWindow = () => {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1200,
+    height: 800,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,
     },
   });
 
@@ -28,6 +44,18 @@ const createWindow = () => {
 
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
+
+  // Handle permissions for screen sharing
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      console.log("🔍 Permission requested:", permission);
+      if (permission === "media") {
+        callback(true); // Allow media permissions
+      } else {
+        callback(false);
+      }
+    }
+  );
 };
 
 // This method will be called when Electron has finished
@@ -49,6 +77,28 @@ app.on("activate", () => {
   // dock icon is clicked and there are no other windows open.
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+// Handle desktop capturer for screen sharing
+ipcMain.handle("get-desktop-sources", async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["window", "screen"],
+      thumbnailSize: { width: 150, height: 150 },
+      fetchWindowIcons: false,
+    });
+    console.log("🔍 Desktop sources found:", sources.length);
+
+    // Log source details for debugging
+    sources.forEach((source, index) => {
+      console.log(`  ${index}: ${source.name} (${source.id})`);
+    });
+
+    return sources;
+  } catch (error) {
+    console.error("❌ Error getting desktop sources:", error);
+    return [];
   }
 });
 

@@ -16,6 +16,11 @@ class GeminiLiveChatApp {
   private mediaStatus: HTMLElement;
   private typingIndicator: HTMLElement;
 
+  // Source selection modal
+  private sourceModal: HTMLElement;
+  private sourceList: HTMLElement;
+  private cancelSourceButton: HTMLButtonElement;
+
   // State
   private isSocketConnected = false;
   private isGeminiConnected = false;
@@ -28,7 +33,7 @@ class GeminiLiveChatApp {
   private isRecording = false;
   private frameSequence: any[] = [];
   private maxFrames = 30;
-  private frameInterval: number | null = null;
+  private frameInterval: NodeJS.Timeout | null = null;
   private videoElement: HTMLVideoElement | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -58,6 +63,13 @@ class GeminiLiveChatApp {
     this.typingIndicator = document.getElementById(
       "typing-indicator"
     ) as HTMLElement;
+
+    // Source selection modal elements
+    this.sourceModal = document.getElementById("source-modal") as HTMLElement;
+    this.sourceList = document.getElementById("source-list") as HTMLElement;
+    this.cancelSourceButton = document.getElementById(
+      "cancel-source"
+    ) as HTMLButtonElement;
 
     this.init();
   }
@@ -103,6 +115,11 @@ class GeminiLiveChatApp {
     this.stopButton.addEventListener("click", () => {
       this.stopCapture();
     });
+
+    // Cancel source selection
+    this.cancelSourceButton.addEventListener("click", () => {
+      this.hideSourceModal();
+    });
   }
 
   private setupSocketSubscriptions() {
@@ -143,6 +160,11 @@ class GeminiLiveChatApp {
     // Processing
     socketService.onProcessingCallback((message) => {
       this.showTypingIndicator();
+    });
+
+    // Video received
+    socketService.onVideoReceivedCallback((message) => {
+      this.addMessage("ai", "✅ " + message);
     });
   }
 
@@ -191,8 +213,62 @@ class GeminiLiveChatApp {
     this.isWaitingResponse = true;
     this.sendButton.disabled = true;
 
-    // Gửi tin nhắn (tạm thời chỉ text, sẽ thêm frames sau)
-    socketService.sendMessage(text);
+    // Gửi tin nhắn với hoặc không có frames
+    if (this.isRecording && this.frameSequence.length > 0) {
+      this.sendTextWithFrameSequence(text, this.frameSequence);
+      // Xóa tất cả frames cũ và bắt đầu sequence mới
+      this.clearFrameSequence();
+    } else {
+      // Chỉ gửi text nếu không có frames
+      socketService.sendMessage(text);
+    }
+  }
+
+  private async sendTextWithFrameSequence(text: string, frameSequence: any[]) {
+    try {
+      console.log(`📤 Sending text with ${frameSequence.length} frames:`, text);
+
+      // Convert tất cả frames thành base64
+      const frameDataArray = [];
+      let totalSize = 0;
+
+      for (let i = 0; i < frameSequence.length; i++) {
+        const frame = frameSequence[i];
+        const arrayBuffer = await frame.blob.arrayBuffer();
+        const base64Data = btoa(
+          String.fromCharCode(...new Uint8Array(arrayBuffer))
+        );
+
+        frameDataArray.push({
+          data: base64Data,
+          mimeType: frame.blob.type,
+          timestamp: frame.timestamp,
+          size: frame.size,
+        });
+
+        totalSize += frame.size;
+      }
+
+      console.log(
+        `📊 Total frames: ${frameSequence.length}, Total size: ${Math.round(
+          totalSize / 1024
+        )}KB`
+      );
+
+      // Gửi text kèm tất cả frames
+      socketService.sendMessageWithFrames(text, frameDataArray);
+    } catch (error) {
+      console.error("Error sending text with frame sequence:", error);
+      // Fallback: chỉ gửi text
+      socketService.sendMessage(text);
+    }
+  }
+
+  private clearFrameSequence() {
+    console.log(`🗑️ Clearing ${this.frameSequence.length} old frames`);
+    this.frameSequence = [];
+    this.mediaStatus.textContent =
+      "📸 Đã xóa frames cũ - Đang thu thập frames mới...";
   }
 
   // UI Methods
@@ -318,18 +394,227 @@ class GeminiLiveChatApp {
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
   }
 
-  // Media Methods (placeholder for now)
+  // Media Methods - Show source selection modal
   private async startScreenShare() {
     try {
-      this.mediaStatus.textContent =
-        "🔄 Đang yêu cầu quyền chia sẻ màn hình...";
+      this.mediaStatus.textContent = "🔄 Đang tải danh sách màn hình...";
 
-      // TODO: Implement screen sharing logic
-      this.mediaStatus.textContent =
-        "📹 Tính năng chia sẻ màn hình sẽ được thêm sau";
+      console.log("🔍 Getting available desktop sources");
+
+      // Check if electronAPI is available
+      const electronAPI = (window as any).electronAPI;
+      if (!electronAPI) {
+        throw new Error("Electron API không khả dụng");
+      }
+
+      // Get available desktop sources
+      const sources = await electronAPI.getDesktopSources();
+      console.log("🔍 Available sources:", sources.length);
+
+      if (sources.length === 0) {
+        throw new Error("Không tìm thấy nguồn màn hình");
+      }
+
+      // Show source selection modal
+      this.showSourceModal(sources);
+      this.mediaStatus.textContent = "📋 Chọn màn hình để chia sẻ";
     } catch (error: any) {
+      console.error("Error getting screen sources:", error);
+      this.mediaStatus.textContent =
+        "❌ Không thể lấy danh sách màn hình: " + error.message;
+    }
+  }
+
+  private showSourceModal(sources: any[]) {
+    // Clear previous sources
+    this.sourceList.innerHTML = "";
+
+    // Add each source as a selectable option
+    sources.forEach((source) => {
+      const sourceItem = document.createElement("div");
+      sourceItem.className =
+        "border rounded-lg p-3 cursor-pointer hover:bg-gray-100 transition-colors";
+
+      const isScreen = source.id.startsWith("screen:");
+      const icon = isScreen ? "🖥️" : "🪟";
+
+      sourceItem.innerHTML = `
+        <div class="flex items-center space-x-3">
+          <div class="text-2xl">${icon}</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-medium text-sm truncate">${source.name}</div>
+            <div class="text-xs text-gray-500">${
+              isScreen ? "Màn hình" : "Cửa sổ"
+            }</div>
+          </div>
+        </div>
+      `;
+
+      sourceItem.addEventListener("click", () => {
+        this.selectSource(source);
+      });
+
+      this.sourceList.appendChild(sourceItem);
+    });
+
+    // Show modal
+    this.sourceModal.classList.remove("hidden");
+  }
+
+  private hideSourceModal() {
+    this.sourceModal.classList.add("hidden");
+    this.mediaStatus.textContent = "";
+  }
+
+  private async selectSource(source: any) {
+    try {
+      this.hideSourceModal();
+      this.mediaStatus.textContent = `🔄 Đang kết nối với ${source.name}...`;
+
+      console.log("🔍 Selected source:", source.name, source.id);
+
+      // Use getUserMedia with the selected desktop source
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: "desktop",
+            chromeMediaSourceId: source.id,
+            minWidth: 640,
+            maxWidth: 1280,
+            minHeight: 480,
+            maxHeight: 720,
+          },
+        } as any,
+      });
+
+      console.log("✅ Screen share started successfully");
+      this.setupVideoFrameCapture();
+      this.updateMediaButtons(true);
+      this.mediaStatus.textContent = `📹 Đang chia sẻ: ${source.name} - Hãy hỏi về nội dung!`;
+    } catch (error: any) {
+      console.error("Error starting screen share:", error);
       this.mediaStatus.textContent =
         "❌ Không thể chia sẻ màn hình: " + error.message;
+    }
+  }
+
+  private setupVideoFrameCapture() {
+    console.log("📹 Setting up image frame capture");
+
+    // Tạo video element để hiển thị stream
+    this.videoElement = document.createElement("video");
+    this.videoElement.srcObject = this.mediaStream;
+    this.videoElement.muted = true; // Ensure muted
+    this.videoElement.autoplay = true;
+
+    // Add event listeners for debugging
+    this.videoElement.onloadstart = () => console.log("📹 Video load started");
+    this.videoElement.oncanplay = () => console.log("📹 Video can play");
+    this.videoElement.onplay = () => console.log("📹 Video playing");
+    this.videoElement.onerror = (e) => console.error("📹 Video error:", e);
+
+    this.videoElement.play();
+
+    // Tạo canvas để capture frames
+    this.canvas = document.createElement("canvas");
+    this.ctx = this.canvas.getContext("2d");
+
+    this.videoElement.onloadedmetadata = () => {
+      // Tối ưu hóa resolution để giảm kích thước file
+      const maxWidth = 1280;
+      const maxHeight = 720;
+
+      let { videoWidth, videoHeight } = this.videoElement!;
+
+      // Scale down nếu quá lớn
+      if (videoWidth > maxWidth || videoHeight > maxHeight) {
+        const ratio = Math.min(maxWidth / videoWidth, maxHeight / videoHeight);
+        videoWidth = Math.floor(videoWidth * ratio);
+        videoHeight = Math.floor(videoHeight * ratio);
+      }
+
+      this.canvas!.width = videoWidth;
+      this.canvas!.height = videoHeight;
+
+      console.log(
+        "📹 Optimized dimensions:",
+        this.canvas!.width,
+        "x",
+        this.canvas!.height
+      );
+
+      // Capture frame đầu tiên
+      this.captureCurrentFrame();
+
+      // Capture frame mỗi 2 giây để giảm tải (thay vì 1 giây)
+      this.frameInterval = setInterval(() => {
+        try {
+          this.captureCurrentFrame();
+        } catch (error) {
+          console.warn("⚠️ Frame capture error:", error);
+        }
+      }, 2000);
+
+      this.isRecording = true;
+      this.mediaStatus.textContent =
+        "📹 Đang capture frames - Sẵn sàng cho câu hỏi";
+    };
+  }
+
+  private captureCurrentFrame() {
+    if (!this.videoElement || !this.canvas || !this.isRecording) return;
+
+    try {
+      // Draw current video frame to canvas
+      this.ctx!.drawImage(
+        this.videoElement,
+        0,
+        0,
+        this.canvas.width,
+        this.canvas.height
+      );
+
+      // Convert to JPEG blob với compression tối ưu
+      this.canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            // Thêm frame vào sequence
+            this.frameSequence.push({
+              blob: blob,
+              timestamp: Date.now(),
+              size: blob.size,
+            });
+
+            // Giới hạn số frames (FIFO - First In First Out)
+            if (this.frameSequence.length > this.maxFrames) {
+              this.frameSequence.shift(); // Xóa frame cũ nhất
+            }
+
+            const sizeKB = Math.round(blob.size / 1024);
+            const totalFrames = this.frameSequence.length;
+            console.log(
+              `📸 Frame ${totalFrames} captured:`,
+              blob.size,
+              "bytes",
+              `(${sizeKB}KB)`
+            );
+
+            // Cảnh báo nếu file quá lớn
+            if (sizeKB > 500) {
+              console.warn("⚠️ Frame size lớn:", sizeKB, "KB");
+            }
+
+            this.mediaStatus.textContent = `📸 ${totalFrames} frames sẵn sàng - Hãy hỏi!`;
+          } else {
+            console.error("❌ Failed to capture frame");
+          }
+        },
+        "image/jpeg",
+        0.7 // Giảm quality để file nhỏ hơn
+      );
+    } catch (error) {
+      console.error("Error capturing frame:", error);
     }
   }
 

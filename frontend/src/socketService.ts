@@ -14,6 +14,7 @@ class SocketService {
   private onGeminiConnected?: (message: string) => void;
   private onGeminiError?: (message: string) => void;
   private onProcessing?: (message: string) => void;
+  private onVideoReceived?: (message: string) => void;
 
   connect(serverUrl: string = "http://localhost:5000") {
     if (this.socket?.connected) {
@@ -82,6 +83,11 @@ class SocketService {
       console.log("🔍 SocketService processing:", data);
       this.onProcessing?.(data.message);
     });
+
+    this.socket.on("videoReceived", (data: { message: string }) => {
+      console.log("🔍 SocketService video received:", data);
+      this.onVideoReceived?.(data.message);
+    });
   }
 
   connectToGemini(systemInstruction?: string) {
@@ -108,6 +114,25 @@ class SocketService {
     this.socket.emit("sendText", { text });
   }
 
+  sendMessageWithFrames(text: string, frames: any[]) {
+    if (!this.socket?.connected) {
+      console.error("🔍 Cannot send message with frames: not connected");
+      return;
+    }
+
+    console.log(
+      "🔍 SocketService sending message with frames:",
+      text,
+      frames.length
+    );
+    this.socket.emit("sendTextWithFrameSequence", {
+      text,
+      frames,
+      totalFrames: frames.length,
+      totalSize: frames.reduce((sum, frame) => sum + frame.size, 0),
+    });
+  }
+
   onConnectionStateChanged(callback: (state: ConnectionState) => void) {
     this.onConnectionStateChange = callback;
     // Send current state immediately
@@ -132,6 +157,10 @@ class SocketService {
 
   onProcessingCallback(callback: (message: string) => void) {
     this.onProcessing = callback;
+  }
+
+  onVideoReceivedCallback(callback: (message: string) => void) {
+    this.onVideoReceived = callback;
   }
 
   private updateConnectionState(newState: Partial<ConnectionState>) {

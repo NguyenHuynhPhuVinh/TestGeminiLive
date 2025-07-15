@@ -108,6 +108,33 @@
         </div>
       </div>
     </div>
+
+    <!-- Screen Source Selection Modal -->
+    <div
+      id="source-modal"
+      class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 modal-backdrop"
+    >
+      <div
+        class="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden"
+      >
+        <h3 class="text-lg font-bold mb-4">Chọn màn hình để chia sẻ</h3>
+        <div
+          id="source-list"
+          class="grid grid-cols-2 gap-4 max-h-96 overflow-y-auto"
+        >
+          <!-- Sources will be populated here -->
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button
+            id="cancel-source"
+            class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+          >
+            Hủy
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/renderer.ts"></script>
   </body>
 </html>
