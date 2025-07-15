@@ -1,0 +1,49 @@
+{
+  "name": "gemini-live-backend",
+  "version": "1.0.0",
+  "description": "Backend Express server với Socket.io cho Gemini Live Chat",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "clean": "rimraf dist",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix"
+  },
+  "keywords": [
+    "express",
+    "socket.io",
+    "gemini",
+    "typescript",
+    "websocket"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^1.9.0",
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.0",
+    "helmet": "^8.1.0",
+    "compression": "^1.8.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.13",
+    "@types/cors": "^2.8.19",
+    "@types/compression": "^1.8.1",
+    "@types/morgan": "^1.9.10",
+    "@typescript-eslint/eslint-plugin": "^8.37.0",
+    "@typescript-eslint/parser": "^8.37.0",
+    "eslint": "^9.31.0",
+    "nodemon": "^3.1.10",
+    "rimraf": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.8.3"
+  }
+}
