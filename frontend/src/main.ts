@@ -13,9 +13,8 @@ if (started) {
   app.quit();
 }
 
-// Enable screen sharing features for Electron
+// Enable screen sharing for Electron desktopCapturer
 app.commandLine.appendSwitch("enable-usermedia-screen-capturing");
-app.commandLine.appendSwitch("allow-http-screen-capture");
 // Force use legacy screen capture to avoid WGC issues
 app.commandLine.appendSwitch("disable-features", "WebRtcUseEchoCanceller3");
 app.commandLine.appendSwitch("force-cpu-draw");
@@ -29,7 +28,6 @@ const createWindow = () => {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,
     },
   });
 
@@ -45,17 +43,8 @@ const createWindow = () => {
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
 
-  // Handle permissions for screen sharing
-  mainWindow.webContents.session.setPermissionRequestHandler(
-    (webContents, permission, callback) => {
-      console.log("🔍 Permission requested:", permission);
-      if (permission === "media") {
-        callback(true); // Allow media permissions
-      } else {
-        callback(false);
-      }
-    }
-  );
+  // Log when app is ready
+  console.log("🔍 Electron app is ready");
 };
 
 // This method will be called when Electron has finished
