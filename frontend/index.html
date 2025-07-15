@@ -2,44 +2,105 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Gemini Live Chat</title>
+    <title>💬 Gemini Live Text Chat</title>
     <link rel="stylesheet" href="/src/index.css" />
   </head>
-  <body class="bg-gray-100 h-screen">
+  <body class="bg-gradient-to-br from-blue-500 to-purple-600 min-h-screen p-5">
     <div
-      id="app"
-      class="h-full flex flex-col max-w-4xl mx-auto bg-white shadow-lg"
+      class="max-w-2xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden h-[85vh] flex flex-col"
     >
       <!-- Header -->
-      <div class="bg-blue-600 text-white p-4 flex justify-between items-center">
-        <h1 class="text-xl font-bold">🤖 Gemini Live Chat</h1>
+      <div
+        class="bg-gradient-to-r from-blue-600 to-green-500 text-white p-5 text-center"
+      >
+        <h1 class="text-2xl font-bold mb-1">💬 Gemini Live Text Chat</h1>
+        <p class="text-sm opacity-90">Trò chuyện văn bản với Gemini AI</p>
+      </div>
+
+      <!-- Status Bar -->
+      <div
+        class="bg-gray-50 px-5 py-3 border-b border-gray-200 flex items-center justify-between"
+      >
         <div class="flex items-center space-x-2">
           <span
             id="status-indicator"
             class="w-3 h-3 rounded-full bg-red-500"
           ></span>
-          <span id="status-text" class="text-sm">Đang kết nối...</span>
+          <span id="status-text" class="text-sm text-gray-600"
+            >🔴 Chưa kết nối</span
+          >
         </div>
+        <button
+          id="connect-button"
+          class="px-4 py-1 bg-green-500 text-white text-sm rounded-full hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Kết nối
+        </button>
       </div>
 
       <!-- Chat Messages -->
-      <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
-        <!-- Messages will be added here -->
+      <div
+        id="chat-messages"
+        class="flex-1 overflow-y-auto p-5 space-y-4 bg-gray-50"
+      >
+        <!-- Welcome message -->
+        <div class="flex justify-start">
+          <div
+            class="max-w-xs lg:max-w-md bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
+          >
+            <div class="text-xs text-gray-500 mb-1">Hệ thống</div>
+            <div class="text-gray-800">
+              Chào mừng bạn đến với Gemini Live Text Chat! Nhấn "Kết nối" để bắt
+              đầu trò chuyện.
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- Chat Input -->
-      <div class="border-t p-4 bg-gray-50">
+      <!-- Typing Indicator -->
+      <div id="typing-indicator" class="hidden px-5 py-2">
+        <div class="flex justify-start">
+          <div class="max-w-xs lg:max-w-md bg-gray-200 rounded-lg p-3">
+            <div class="text-xs text-gray-500 mb-1">Gemini</div>
+            <div class="text-gray-700">
+              Đang trả lời<span class="typing-dots">...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Media Controls -->
+      <div class="px-5 py-3 bg-white border-t border-gray-200">
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button
+            id="screen-button"
+            class="px-4 py-2 bg-gray-600 text-white text-sm rounded-full hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled
+          >
+            📹 Chia sẻ màn hình
+          </button>
+          <button
+            id="stop-button"
+            class="px-4 py-2 bg-red-600 text-white text-sm rounded-full hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed hidden"
+            disabled
+          >
+            ⏹️ Dừng
+          </button>
+        </div>
+        <div id="media-status" class="text-xs text-gray-600 mb-3"></div>
+
+        <!-- Chat Input -->
         <div class="flex space-x-2">
           <input
             type="text"
             id="message-input"
-            placeholder="Nhập tin nhắn của bạn..."
-            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="Hỏi về video đang chia sẻ..."
+            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-full focus:outline-none focus:border-blue-500 transition-colors disabled:bg-gray-100 disabled:cursor-not-allowed"
             disabled
           />
           <button
             id="send-button"
-            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             disabled
           >
             Gửi

@@ -6,3 +6,22 @@ body {
   margin: 0;
   padding: 0;
 }
+
+/* Typing animation */
+.typing-dots::after {
+  content: "...";
+  animation: typing 1.5s infinite;
+}
+
+@keyframes typing {
+  0%,
+  60% {
+    content: "...";
+  }
+  20% {
+    content: ".";
+  }
+  40% {
+    content: "..";
+  }
+}
