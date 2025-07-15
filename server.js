@@ -4,7 +4,6 @@ import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import cors from "cors";
 import { GoogleGenAI, Modality } from "@google/genai";
 
 // Load environment variables
@@ -20,9 +19,8 @@ const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(__dirname));
 
 // Kiểm tra API key
 if (
@@ -46,21 +44,6 @@ wss.on("connection", (ws) => {
   let geminiSession = null;
   let responseQueue = [];
 
-  // Helper functions
-  async function waitMessage() {
-    let done = false;
-    let message = undefined;
-    while (!done) {
-      message = responseQueue.shift();
-      if (message) {
-        done = true;
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
-    return message;
-  }
-
   ws.on("message", async (data) => {
     try {
       const message = JSON.parse(data);
@@ -69,11 +52,11 @@ wss.on("connection", (ws) => {
         case "connect":
           await handleConnect(message);
           break;
-        case "sendAudio":
-          await handleSendAudio(message);
-          break;
         case "sendText":
           await handleSendText(message);
+          break;
+        case "sendTextWithFrameSequence":
+          await handleSendTextWithFrameSequence(message);
           break;
         case "disconnect":
           await handleDisconnect();
@@ -94,70 +77,72 @@ wss.on("connection", (ws) => {
 
   async function handleConnect(message) {
     try {
-      console.log("🔗 Connecting to Gemini Live...");
+      console.log("🔗 Connecting to Gemini Live (Text Only)...");
 
       const config = {
-        responseModalities: [Modality.TEXT, Modality.AUDIO],
+        responseModalities: [Modality.TEXT], // CHỈ trả về text, KHÔNG có audio
         systemInstruction:
           message.systemInstruction ||
-          "Bạn là một trợ lý AI thông minh. Hãy trả lời ngắn gọn và thân thiện bằng tiếng Việt.",
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
+          "Bạn là một trợ lý AI thông minh có thể xem và phân tích hình ảnh từ màn hình người dùng. Khi nhận được hình ảnh, hãy mô tả chi tiết và chính xác những gì bạn thấy. Trả lời bằng tiếng Việt thân thiện, cụ thể và hữu ích.",
       };
 
       geminiSession = await ai.live.connect({
-        model:
-          process.env.GEMINI_MODEL ||
-          "gemini-2.5-flash-preview-native-audio-dialog",
+        model: "gemini-live-2.5-flash-preview",
         callbacks: {
           onopen: () => {
             console.log("✅ Connected to Gemini Live");
             ws.send(
               JSON.stringify({
                 type: "connected",
-                message: "Đã kết nối với Gemini Live",
+                message: "Đã kết nối với Gemini Live (Text Only)",
               })
             );
           },
           onmessage: (msg) => {
             responseQueue.push(msg);
-            if (msg.data) {
+
+            // Debug log để xem structure của message
+            console.log(
+              "📨 Received message type:",
+              typeof msg,
+              Object.keys(msg)
+            );
+
+            // Ưu tiên xử lý msg.text trước
+            if (msg.text) {
+              console.log("📝 Sending text chunk:", msg.text);
               ws.send(
                 JSON.stringify({
-                  type: "audioResponse",
-                  data: msg.data,
+                  type: "textChunk",
+                  text: msg.text,
                 })
               );
             }
-            if (msg.serverContent?.modelTurn?.parts) {
+            // Chỉ xử lý modelTurn.parts nếu không có msg.text
+            else if (msg.serverContent?.modelTurn?.parts) {
               const textParts = msg.serverContent.modelTurn.parts
                 .filter((part) => part.text)
                 .map((part) => part.text);
               if (textParts.length > 0) {
+                console.log(
+                  "📝 Sending model turn parts:",
+                  textParts.join(" ")
+                );
                 ws.send(
                   JSON.stringify({
-                    type: "textResponse",
+                    type: "textChunk",
                     text: textParts.join(" "),
                   })
                 );
               }
             }
 
-            // Handle transcriptions
-            if (msg.serverContent?.inputTranscription) {
+            // Báo hiệu turn complete
+            if (msg.serverContent?.turnComplete) {
+              console.log("✅ Turn complete");
               ws.send(
                 JSON.stringify({
-                  type: "inputTranscription",
-                  text: msg.serverContent.inputTranscription.text,
-                })
-              );
-            }
-
-            if (msg.serverContent?.outputTranscription) {
-              ws.send(
-                JSON.stringify({
-                  type: "outputTranscription",
-                  text: msg.serverContent.outputTranscription.text,
+                  type: "turnComplete",
                 })
               );
             }
@@ -194,35 +179,6 @@ wss.on("connection", (ws) => {
     }
   }
 
-  async function handleSendAudio(message) {
-    if (!geminiSession) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: "Chưa kết nối với Gemini Live",
-        })
-      );
-      return;
-    }
-
-    try {
-      geminiSession.sendRealtimeInput({
-        audio: {
-          data: message.audioData,
-          mimeType: "audio/pcm;rate=16000",
-        },
-      });
-    } catch (error) {
-      console.error("❌ Error sending audio:", error);
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: "Lỗi khi gửi âm thanh: " + error.message,
-        })
-      );
-    }
-  }
-
   async function handleSendText(message) {
     if (!geminiSession) {
       ws.send(
@@ -235,9 +191,21 @@ wss.on("connection", (ws) => {
     }
 
     try {
-      geminiSession.sendRealtimeInput({
-        text: message.text,
+      console.log("📤 Sending text only to Gemini:", message.text);
+
+      // Chỉ gửi text (không kèm video)
+      geminiSession.sendClientContent({
+        turns: message.text,
+        turnComplete: true,
       });
+
+      // Báo hiệu đang xử lý
+      ws.send(
+        JSON.stringify({
+          type: "processing",
+          message: "Đang xử lý tin nhắn...",
+        })
+      );
     } catch (error) {
       console.error("❌ Error sending text:", error);
       ws.send(
@@ -249,10 +217,80 @@ wss.on("connection", (ws) => {
     }
   }
 
+  async function handleSendTextWithFrameSequence(message) {
+    if (!geminiSession) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Chưa kết nối với Gemini Live",
+        })
+      );
+      return;
+    }
+
+    try {
+      console.log(
+        `📤 Sending text with ${message.totalFrames} frames to Gemini:`,
+        message.text
+      );
+      console.log(`📊 Total size: ${Math.round(message.totalSize / 1024)}KB`);
+
+      // Kiểm tra kích thước tổng
+      if (message.totalSize > 15 * 1024 * 1024) {
+        // > 15MB
+        console.log("⚠️ Frame sequence quá lớn, chỉ gửi text");
+        geminiSession.sendClientContent({
+          turns: message.text,
+          turnComplete: true,
+        });
+        return;
+      }
+
+      // Tạo turns array với text + tất cả frames
+      const turns = [message.text];
+
+      // Thêm tất cả frames vào turns
+      message.frames.forEach((frame, index) => {
+        turns.push({
+          inlineData: {
+            data: frame.data,
+            mimeType: frame.mimeType,
+          },
+        });
+      });
+
+      console.log(
+        `🖼️ Sending ${message.totalFrames} frames via sendClientContent...`
+      );
+
+      geminiSession.sendClientContent({
+        turns: turns,
+        turnComplete: true,
+      });
+
+      // Báo hiệu đang xử lý
+      ws.send(
+        JSON.stringify({
+          type: "processing",
+          message: `Đang xử lý tin nhắn với ${message.totalFrames} frames...`,
+        })
+      );
+    } catch (error) {
+      console.error("❌ Error sending text with frame sequence:", error);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Lỗi khi gửi tin nhắn với frames: " + error.message,
+        })
+      );
+    }
+  }
+
   async function handleDisconnect() {
     if (geminiSession) {
       geminiSession.close();
       geminiSession = null;
+      responseQueue = [];
     }
   }
 
@@ -266,15 +304,14 @@ wss.on("connection", (ws) => {
 
 // Routes
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.get("/api/status", (req, res) => {
   res.json({
     status: "running",
-    model:
-      process.env.GEMINI_MODEL ||
-      "gemini-2.5-flash-preview-native-audio-dialog",
+    mode: "text-only",
+    model: "gemini-live-2.5-flash-preview",
     hasApiKey: !!(
       process.env.GEMINI_API_KEY &&
       process.env.GEMINI_API_KEY !== "your_api_key_here"
@@ -284,9 +321,9 @@ app.get("/api/status", (req, res) => {
 
 // Start server
 server.listen(PORT, () => {
-  console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+  console.log(`🚀 Text Chat Server đang chạy tại http://localhost:${PORT}`);
   console.log(
-    `📱 Mở trình duyệt và truy cập http://localhost:${PORT} để test Gemini Live`
+    `📱 Mở trình duyệt và truy cập http://localhost:${PORT} để chat với Gemini`
   );
 
   if (
