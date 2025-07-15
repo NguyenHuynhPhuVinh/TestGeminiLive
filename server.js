@@ -304,7 +304,7 @@ wss.on("connection", (ws) => {
 
 // Routes
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  res.sendFile(path.join(__dirname, "index-new.html"));
 });
 
 app.get("/api/status", (req, res) => {
