@@ -83,6 +83,9 @@ wss.on("connection", (ws) => {
         case "sendText":
           await handleSendText(message);
           break;
+        case "sendTextWithVideo":
+          await handleSendTextWithVideo(message);
+          break;
         case "disconnect":
           await handleDisconnect();
           break;
@@ -105,10 +108,10 @@ wss.on("connection", (ws) => {
       console.log("🔗 Connecting to Gemini Live (Text Only)...");
 
       const config = {
-        responseModalities: [Modality.TEXT],
+        responseModalities: [Modality.TEXT], // CHỈ trả về text, KHÔNG có audio
         systemInstruction:
           message.systemInstruction ||
-          "Bạn là một trợ lý AI thông minh. Hãy trả lời ngắn gọn và thân thiện bằng tiếng Việt.",
+          "Bạn là một trợ lý AI thông minh có thể xem và phân tích hình ảnh từ màn hình người dùng. Khi nhận được hình ảnh, hãy mô tả chi tiết và chính xác những gì bạn thấy. Trả lời bằng tiếng Việt thân thiện, cụ thể và hữu ích.",
       };
 
       geminiSession = await ai.live.connect({
@@ -216,11 +219,13 @@ wss.on("connection", (ws) => {
     }
 
     try {
-      console.log("📤 Sending text to Gemini:", message.text);
+      console.log("📤 Sending text only to Gemini:", message.text);
 
-      // Gửi tin nhắn văn bản theo format của documentation
-      const inputTurns = message.text;
-      geminiSession.sendClientContent({ turns: inputTurns });
+      // Chỉ gửi text (không kèm video)
+      geminiSession.sendClientContent({
+        turns: message.text,
+        turnComplete: true,
+      });
 
       // Báo hiệu đang xử lý
       ws.send(
@@ -235,6 +240,81 @@ wss.on("connection", (ws) => {
         JSON.stringify({
           type: "error",
           message: "Lỗi khi gửi tin nhắn: " + error.message,
+        })
+      );
+    }
+  }
+
+  async function handleSendTextWithVideo(message) {
+    if (!geminiSession) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Chưa kết nối với Gemini Live",
+        })
+      );
+      return;
+    }
+
+    try {
+      console.log("📤 Sending text with video to Gemini:", message.text);
+      console.log("📊 Video data size:", message.videoData.length);
+      console.log("📊 MIME type:", message.mimeType);
+
+      // Kiểm tra kích thước video
+      const videoSizeKB = Math.round((message.videoData.length * 0.75) / 1024); // Base64 to bytes
+      console.log("📊 Video size:", videoSizeKB, "KB");
+
+      if (videoSizeKB > 15000) {
+        // > 15MB
+        console.log("⚠️ Video quá lớn, bỏ qua video và chỉ gửi text");
+        geminiSession.sendClientContent({
+          turns: message.text,
+          turnComplete: true,
+        });
+        return;
+      }
+
+      // Gửi image frame thay vì video (theo approach của Medium article)
+      console.log(
+        "🖼️ Sending image frame via sendClientContent with inlineData..."
+      );
+
+      // Detect if this is an image or video based on MIME type
+      let mimeType = message.mimeType || "image/jpeg";
+      if (mimeType.startsWith("video/")) {
+        console.log("⚠️ Converting video MIME type to image/jpeg");
+        mimeType = "image/jpeg";
+      }
+
+      const turns = [
+        message.text,
+        {
+          inlineData: {
+            data: message.videoData,
+            mimeType: mimeType,
+          },
+        },
+      ];
+
+      geminiSession.sendClientContent({
+        turns: turns,
+        turnComplete: true,
+      });
+
+      // Báo hiệu đang xử lý
+      ws.send(
+        JSON.stringify({
+          type: "processing",
+          message: "Đang xử lý tin nhắn với video context...",
+        })
+      );
+    } catch (error) {
+      console.error("❌ Error sending text with video:", error);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Lỗi khi gửi tin nhắn với video: " + error.message,
         })
       );
     }

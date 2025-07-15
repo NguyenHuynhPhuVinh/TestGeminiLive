@@ -147,6 +147,40 @@
         background: #ccc;
         cursor: not-allowed;
       }
+      .media-controls {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+      .media-btn {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 0.9em;
+        transition: background-color 0.3s;
+      }
+      .media-btn:hover:not(:disabled) {
+        background: #5a6268;
+      }
+      .media-btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      .media-btn.active {
+        background: #dc3545;
+      }
+      .media-btn.active:hover {
+        background: #c82333;
+      }
+      .media-status {
+        font-size: 0.8em;
+        color: #666;
+        margin-top: 5px;
+      }
       .typing-indicator {
         display: none;
         padding: 12px 16px;
@@ -203,12 +237,22 @@
         </div>
       </div>
       <div class="input-container">
+        <div class="media-controls">
+          <button id="screenBtn" class="media-btn" disabled>
+            📹 Chia sẻ màn hình
+          </button>
+
+          <button id="stopBtn" class="media-btn" disabled style="display: none">
+            ⏹️ Dừng
+          </button>
+        </div>
+        <div class="media-status" id="mediaStatus"></div>
         <div class="input-group">
           <input
             type="text"
             id="textInput"
             class="text-input"
-            placeholder="Nhập tin nhắn của bạn..."
+            placeholder="Hỏi về video đang chia sẻ..."
             disabled
           />
           <button id="sendBtn" class="send-btn" disabled>Gửi</button>
@@ -224,6 +268,13 @@
           this.isWaitingResponse = false;
           this.currentAiMessage = null;
           this.currentAiContent = "";
+          this.mediaStream = null;
+          this.mediaRecorder = null;
+          this.isRecording = false;
+          this.videoChunks = [];
+          this.audioChunks = [];
+          this.currentVideoBlob = null;
+          this.lastFrameData = null; // Để so sánh frame changes
           this.initializeElements();
           this.setupEventListeners();
         }
@@ -235,6 +286,9 @@
           this.sendBtn = document.getElementById("sendBtn");
           this.messagesEl = document.getElementById("messages");
           this.typingIndicator = document.getElementById("typingIndicator");
+          this.screenBtn = document.getElementById("screenBtn");
+          this.stopBtn = document.getElementById("stopBtn");
+          this.mediaStatus = document.getElementById("mediaStatus");
         }
 
         setupEventListeners() {
@@ -242,6 +296,11 @@
             this.toggleConnection()
           );
           this.sendBtn.addEventListener("click", () => this.sendMessage());
+          this.screenBtn.addEventListener("click", () =>
+            this.startScreenShare()
+          );
+
+          this.stopBtn.addEventListener("click", () => this.stopCapture());
           this.textInput.addEventListener("keypress", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -315,6 +374,7 @@
               this.connectBtn.disabled = false;
               this.textInput.disabled = false;
               this.sendBtn.disabled = false;
+              this.screenBtn.disabled = false;
               this.addMessage("ai", message.message);
               break;
             case "textChunk":
@@ -326,6 +386,9 @@
               this.finishAiMessage();
               this.isWaitingResponse = false;
               this.sendBtn.disabled = false;
+              break;
+            case "videoReceived":
+              this.addMessage("ai", "✅ " + message.message);
               break;
 
             case "processing":
@@ -381,11 +444,13 @@
             this.ws.close();
             this.ws = null;
           }
+          this.stopCapture(); // Stop any ongoing media capture
           this.isConnected = false;
           this.updateStatus("🔴 Chưa kết nối", false);
           this.connectBtn.textContent = "Kết nối";
           this.textInput.disabled = true;
           this.sendBtn.disabled = true;
+          this.screenBtn.disabled = true;
           this.hideTypingIndicator();
         }
 
@@ -401,17 +466,59 @@
           if (!text || !this.isConnected || this.isWaitingResponse) return;
 
           this.addMessage("user", text);
+
+          // Thông báo nếu đang gửi kèm video
+          if (this.isRecording) {
+            this.addMessage(
+              "system",
+              "📹 Đang gửi câu hỏi kèm video context đến Gemini..."
+            );
+          }
+
           this.textInput.value = "";
           this.isWaitingResponse = true;
           this.sendBtn.disabled = true;
 
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(
-              JSON.stringify({
-                type: "sendText",
-                text: text,
-              })
-            );
+            // Nếu đang ghi video, stop để lấy video hoàn chỉnh
+            if (
+              this.isRecording &&
+              this.mediaRecorder &&
+              this.currentVideoBlob === null
+            ) {
+              // Stop recording để trigger ondataavailable
+              this.mediaRecorder.stop();
+
+              // Đợi một chút để video được xử lý, rồi gửi
+              setTimeout(() => {
+                if (this.currentVideoBlob) {
+                  this.sendTextWithVideo(text, this.currentVideoBlob);
+                  // Bắt đầu ghi video mới sau khi gửi
+                  this.restartVideoRecording();
+                } else {
+                  // Fallback: chỉ gửi text
+                  this.ws.send(
+                    JSON.stringify({
+                      type: "sendText",
+                      text: text,
+                    })
+                  );
+                }
+              }, 100);
+            } else if (this.currentVideoBlob) {
+              // Đã có video sẵn sàng
+              this.sendTextWithVideo(text, this.currentVideoBlob);
+              // Bắt đầu ghi video mới
+              this.restartVideoRecording();
+            } else {
+              // Chỉ gửi text nếu không có video
+              this.ws.send(
+                JSON.stringify({
+                  type: "sendText",
+                  text: text,
+                })
+              );
+            }
           } else {
             this.addMessage("error", "Không có kết nối WebSocket");
             this.isWaitingResponse = false;
@@ -449,6 +556,255 @@
 
         scrollToBottom() {
           this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        }
+
+        async startScreenShare() {
+          try {
+            this.mediaStatus.textContent =
+              "🔄 Đang yêu cầu quyền chia sẻ màn hình...";
+
+            this.mediaStream = await navigator.mediaDevices.getDisplayMedia({
+              video: { mediaSource: "screen" },
+              audio: true, // Capture system audio
+            });
+
+            this.setupVideoFrameCapture();
+            this.updateMediaButtons(true);
+            this.mediaStatus.textContent =
+              "📹 Đang thu video từ màn hình - Hãy hỏi về nội dung!";
+          } catch (error) {
+            console.error("Error starting screen share:", error);
+            this.mediaStatus.textContent =
+              "❌ Không thể chia sẻ màn hình: " + error.message;
+          }
+        }
+
+        setupVideoFrameCapture() {
+          // Thay đổi approach: Capture image frames thay vì video
+          console.log("📹 Setting up image frame capture instead of video");
+
+          // Tạo video element để hiển thị stream
+          this.videoElement = document.createElement("video");
+          this.videoElement.srcObject = this.mediaStream;
+          this.videoElement.play();
+
+          // Tạo canvas để capture frames
+          this.canvas = document.createElement("canvas");
+          this.ctx = this.canvas.getContext("2d");
+
+          this.videoElement.onloadedmetadata = () => {
+            // Tối ưu hóa resolution để giảm kích thước file
+            const maxWidth = 1280;
+            const maxHeight = 720;
+
+            let { videoWidth, videoHeight } = this.videoElement;
+
+            // Scale down nếu quá lớn
+            if (videoWidth > maxWidth || videoHeight > maxHeight) {
+              const ratio = Math.min(
+                maxWidth / videoWidth,
+                maxHeight / videoHeight
+              );
+              videoWidth = Math.floor(videoWidth * ratio);
+              videoHeight = Math.floor(videoHeight * ratio);
+            }
+
+            this.canvas.width = videoWidth;
+            this.canvas.height = videoHeight;
+
+            console.log(
+              "📹 Optimized dimensions:",
+              this.canvas.width,
+              "x",
+              this.canvas.height
+            );
+
+            // Capture frame đầu tiên
+            this.captureCurrentFrame();
+
+            // Capture frame mới mỗi 2 giây để responsive hơn
+            this.frameInterval = setInterval(() => {
+              this.captureCurrentFrame();
+            }, 2000);
+
+            this.isRecording = true;
+            this.mediaStatus.textContent =
+              "📹 Đang capture frames - Sẵn sàng cho câu hỏi";
+          };
+        }
+
+        captureCurrentFrame() {
+          if (!this.videoElement || !this.canvas || !this.isRecording) return;
+
+          try {
+            // Draw current video frame to canvas
+            this.ctx.drawImage(
+              this.videoElement,
+              0,
+              0,
+              this.canvas.width,
+              this.canvas.height
+            );
+
+            // Convert to JPEG blob với compression tối ưu
+            this.canvas.toBlob(
+              (blob) => {
+                if (blob) {
+                  this.currentVideoBlob = blob;
+                  const sizeKB = Math.round(blob.size / 1024);
+                  console.log(
+                    "📸 Frame captured:",
+                    blob.size,
+                    "bytes",
+                    `(${sizeKB}KB)`
+                  );
+
+                  // Cảnh báo nếu file quá lớn
+                  if (sizeKB > 500) {
+                    console.warn("⚠️ Frame size lớn:", sizeKB, "KB");
+                  }
+
+                  this.mediaStatus.textContent = `📸 Frame sẵn sàng (${sizeKB}KB) - Hãy hỏi!`;
+                } else {
+                  console.error("❌ Failed to capture frame");
+                }
+              },
+              "image/jpeg",
+              0.7 // Giảm quality để file nhỏ hơn
+            );
+          } catch (error) {
+            console.error("Error capturing frame:", error);
+          }
+        }
+
+        async sendTextWithVideo(text, videoBlob) {
+          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            return;
+          }
+
+          try {
+            const arrayBuffer = await videoBlob.arrayBuffer();
+            const base64Data = btoa(
+              String.fromCharCode(...new Uint8Array(arrayBuffer))
+            );
+
+            console.log("📤 Sending text with video:", text);
+            console.log("📊 Video size:", videoBlob.size, "bytes");
+            console.log("📊 Video MIME type:", videoBlob.type);
+
+            // Gửi text kèm video data
+            this.ws.send(
+              JSON.stringify({
+                type: "sendTextWithVideo",
+                text: text,
+                videoData: base64Data,
+                mimeType: videoBlob.type,
+              })
+            );
+          } catch (error) {
+            console.error("Error sending text with video:", error);
+            // Fallback: chỉ gửi text
+            this.ws.send(
+              JSON.stringify({
+                type: "sendText",
+                text: text,
+              })
+            );
+          }
+        }
+
+        restartVideoRecording() {
+          if (!this.mediaStream) return;
+
+          // Xóa video cũ
+          this.currentVideoBlob = null;
+
+          // Tạo MediaRecorder mới với format được hỗ trợ
+          let options = { videoBitsPerSecond: 500000 };
+
+          if (MediaRecorder.isTypeSupported("video/mp4")) {
+            options.mimeType = "video/mp4";
+          } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
+            options.mimeType = "video/webm;codecs=vp8";
+          } else if (MediaRecorder.isTypeSupported("video/webm")) {
+            options.mimeType = "video/webm";
+          }
+
+          this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
+
+          this.mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              this.currentVideoBlob = event.data;
+              console.log("📹 New video recorded:", event.data.size, "bytes");
+
+              this.mediaStatus.textContent = `📹 Video mới sẵn sàng (${Math.round(
+                event.data.size / 1024
+              )}KB) - Hãy hỏi!`;
+            }
+          };
+
+          this.mediaRecorder.onstop = () => {
+            this.mediaStatus.textContent = "⏹️ Đã dừng chia sẻ màn hình";
+            this.updateMediaButtons(false);
+          };
+
+          // Bắt đầu ghi video mới
+          this.mediaRecorder.start();
+          this.mediaStatus.textContent =
+            "📹 Đang ghi video mới - Sẵn sàng cho câu hỏi tiếp theo";
+        }
+
+        stopCapture() {
+          this.isRecording = false;
+
+          // Stop MediaRecorder nếu có
+          if (this.mediaRecorder) {
+            this.mediaRecorder.stop();
+            this.mediaRecorder = null;
+          }
+
+          // Stop frame capture interval
+          if (this.frameInterval) {
+            clearInterval(this.frameInterval);
+            this.frameInterval = null;
+          }
+
+          // Clean up video elements
+          if (this.videoElement) {
+            this.videoElement.pause();
+            this.videoElement.srcObject = null;
+            this.videoElement = null;
+          }
+
+          if (this.canvas) {
+            this.canvas = null;
+            this.ctx = null;
+          }
+
+          // Clean up data
+          this.currentVideoBlob = null;
+          this.audioChunks = [];
+
+          // Stop media stream
+          if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach((track) => track.stop());
+            this.mediaStream = null;
+          }
+
+          this.updateMediaButtons(false);
+          this.mediaStatus.textContent = "";
+        }
+
+        updateMediaButtons(isRecording) {
+          this.screenBtn.disabled = isRecording || !this.isConnected;
+          this.stopBtn.disabled = !isRecording;
+          this.stopBtn.style.display = isRecording ? "inline-block" : "none";
+
+          if (isRecording) {
+            this.screenBtn.classList.add("active");
+          } else {
+            this.screenBtn.classList.remove("active");
+          }
         }
       }
 
