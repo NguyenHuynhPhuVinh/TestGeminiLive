@@ -41,6 +41,12 @@ export class GeminiService {
             logger.info("✅ Gemini Live session opened");
           },
           onmessage: (msg: any) => {
+            // 🔍 DEBUG: Log giống file cũ để debug
+            console.log(
+              "📨 Received message type:",
+              typeof msg,
+              Object.keys(msg)
+            );
             logger.debug(
               "📨 Received Gemini message:",
               typeof msg,
@@ -74,8 +80,9 @@ export class GeminiService {
     try {
       logger.info("📤 Sending text to Gemini:", text);
 
+      // ✅ THEO FILE CŨ: turns là string, không phải array
       session.sendClientContent({
-        turns: [text], // FIX: turns phải là array
+        turns: text,
         turnComplete: true,
       });
     } catch (error: any) {
