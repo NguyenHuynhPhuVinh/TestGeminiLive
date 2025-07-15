@@ -273,8 +273,8 @@
           this.isRecording = false;
           this.videoChunks = [];
           this.audioChunks = [];
-          this.currentVideoBlob = null;
-          this.lastFrameData = null; // Để so sánh frame changes
+          this.frameSequence = []; // Array để lưu tất cả frames
+          this.maxFrames = 30; // Tối đa 30 frames (30 giây)
           this.initializeElements();
           this.setupEventListeners();
         }
@@ -480,38 +480,13 @@
           this.sendBtn.disabled = true;
 
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            // Nếu đang ghi video, stop để lấy video hoàn chỉnh
-            if (
-              this.isRecording &&
-              this.mediaRecorder &&
-              this.currentVideoBlob === null
-            ) {
-              // Stop recording để trigger ondataavailable
-              this.mediaRecorder.stop();
-
-              // Đợi một chút để video được xử lý, rồi gửi
-              setTimeout(() => {
-                if (this.currentVideoBlob) {
-                  this.sendTextWithVideo(text, this.currentVideoBlob);
-                  // Bắt đầu ghi video mới sau khi gửi
-                  this.restartVideoRecording();
-                } else {
-                  // Fallback: chỉ gửi text
-                  this.ws.send(
-                    JSON.stringify({
-                      type: "sendText",
-                      text: text,
-                    })
-                  );
-                }
-              }, 100);
-            } else if (this.currentVideoBlob) {
-              // Đã có video sẵn sàng
-              this.sendTextWithVideo(text, this.currentVideoBlob);
-              // Bắt đầu ghi video mới
-              this.restartVideoRecording();
+            // Nếu có frame sequence, gửi tất cả frames
+            if (this.frameSequence && this.frameSequence.length > 0) {
+              this.sendTextWithFrameSequence(text, this.frameSequence);
+              // Xóa tất cả frames cũ và bắt đầu sequence mới
+              this.clearFrameSequence();
             } else {
-              // Chỉ gửi text nếu không có video
+              // Chỉ gửi text nếu không có frames
               this.ws.send(
                 JSON.stringify({
                   type: "sendText",
@@ -622,10 +597,10 @@
             // Capture frame đầu tiên
             this.captureCurrentFrame();
 
-            // Capture frame mới mỗi 2 giây để responsive hơn
+            // Capture frame mỗi 1 giây để tạo sequence
             this.frameInterval = setInterval(() => {
               this.captureCurrentFrame();
-            }, 2000);
+            }, 1000);
 
             this.isRecording = true;
             this.mediaStatus.textContent =
@@ -650,10 +625,22 @@
             this.canvas.toBlob(
               (blob) => {
                 if (blob) {
-                  this.currentVideoBlob = blob;
+                  // Thêm frame vào sequence
+                  this.frameSequence.push({
+                    blob: blob,
+                    timestamp: Date.now(),
+                    size: blob.size,
+                  });
+
+                  // Giới hạn số frames (FIFO - First In First Out)
+                  if (this.frameSequence.length > this.maxFrames) {
+                    this.frameSequence.shift(); // Xóa frame cũ nhất
+                  }
+
                   const sizeKB = Math.round(blob.size / 1024);
+                  const totalFrames = this.frameSequence.length;
                   console.log(
-                    "📸 Frame captured:",
+                    `📸 Frame ${totalFrames} captured:`,
                     blob.size,
                     "bytes",
                     `(${sizeKB}KB)`
@@ -664,7 +651,7 @@
                     console.warn("⚠️ Frame size lớn:", sizeKB, "KB");
                   }
 
-                  this.mediaStatus.textContent = `📸 Frame sẵn sàng (${sizeKB}KB) - Hãy hỏi!`;
+                  this.mediaStatus.textContent = `📸 ${totalFrames} frames sẵn sàng - Hãy hỏi!`;
                 } else {
                   console.error("❌ Failed to capture frame");
                 }
@@ -677,32 +664,56 @@
           }
         }
 
-        async sendTextWithVideo(text, videoBlob) {
+        async sendTextWithFrameSequence(text, frameSequence) {
           if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return;
           }
 
           try {
-            const arrayBuffer = await videoBlob.arrayBuffer();
-            const base64Data = btoa(
-              String.fromCharCode(...new Uint8Array(arrayBuffer))
+            console.log(
+              `📤 Sending text with ${frameSequence.length} frames:`,
+              text
             );
 
-            console.log("📤 Sending text with video:", text);
-            console.log("📊 Video size:", videoBlob.size, "bytes");
-            console.log("📊 Video MIME type:", videoBlob.type);
+            // Convert tất cả frames thành base64
+            const frameDataArray = [];
+            let totalSize = 0;
 
-            // Gửi text kèm video data
+            for (let i = 0; i < frameSequence.length; i++) {
+              const frame = frameSequence[i];
+              const arrayBuffer = await frame.blob.arrayBuffer();
+              const base64Data = btoa(
+                String.fromCharCode(...new Uint8Array(arrayBuffer))
+              );
+
+              frameDataArray.push({
+                data: base64Data,
+                mimeType: frame.blob.type,
+                timestamp: frame.timestamp,
+                size: frame.size,
+              });
+
+              totalSize += frame.size;
+            }
+
+            console.log(
+              `📊 Total frames: ${
+                frameSequence.length
+              }, Total size: ${Math.round(totalSize / 1024)}KB`
+            );
+
+            // Gửi text kèm tất cả frames
             this.ws.send(
               JSON.stringify({
-                type: "sendTextWithVideo",
+                type: "sendTextWithFrameSequence",
                 text: text,
-                videoData: base64Data,
-                mimeType: videoBlob.type,
+                frames: frameDataArray,
+                totalFrames: frameSequence.length,
+                totalSize: totalSize,
               })
             );
           } catch (error) {
-            console.error("Error sending text with video:", error);
+            console.error("Error sending text with frame sequence:", error);
             // Fallback: chỉ gửi text
             this.ws.send(
               JSON.stringify({
@@ -711,6 +722,13 @@
               })
             );
           }
+        }
+
+        clearFrameSequence() {
+          console.log(`🗑️ Clearing ${this.frameSequence.length} old frames`);
+          this.frameSequence = [];
+          this.mediaStatus.textContent =
+            "📸 Đã xóa frames cũ - Đang thu thập frames mới...";
         }
 
         restartVideoRecording() {
@@ -782,7 +800,7 @@
           }
 
           // Clean up data
-          this.currentVideoBlob = null;
+          this.frameSequence = [];
           this.audioChunks = [];
 
           // Stop media stream

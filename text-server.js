@@ -86,6 +86,9 @@ wss.on("connection", (ws) => {
         case "sendTextWithVideo":
           await handleSendTextWithVideo(message);
           break;
+        case "sendTextWithFrameSequence":
+          await handleSendTextWithFrameSequence(message);
+          break;
         case "disconnect":
           await handleDisconnect();
           break;
@@ -315,6 +318,75 @@ wss.on("connection", (ws) => {
         JSON.stringify({
           type: "error",
           message: "Lỗi khi gửi tin nhắn với video: " + error.message,
+        })
+      );
+    }
+  }
+
+  async function handleSendTextWithFrameSequence(message) {
+    if (!geminiSession) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Chưa kết nối với Gemini Live",
+        })
+      );
+      return;
+    }
+
+    try {
+      console.log(
+        `📤 Sending text with ${message.totalFrames} frames to Gemini:`,
+        message.text
+      );
+      console.log(`📊 Total size: ${Math.round(message.totalSize / 1024)}KB`);
+
+      // Kiểm tra kích thước tổng
+      if (message.totalSize > 15 * 1024 * 1024) {
+        // > 15MB
+        console.log("⚠️ Frame sequence quá lớn, chỉ gửi text");
+        geminiSession.sendClientContent({
+          turns: message.text,
+          turnComplete: true,
+        });
+        return;
+      }
+
+      // Tạo turns array với text + tất cả frames
+      const turns = [message.text];
+
+      // Thêm tất cả frames vào turns
+      message.frames.forEach((frame, index) => {
+        turns.push({
+          inlineData: {
+            data: frame.data,
+            mimeType: frame.mimeType,
+          },
+        });
+      });
+
+      console.log(
+        `🖼️ Sending ${message.totalFrames} frames via sendClientContent...`
+      );
+
+      geminiSession.sendClientContent({
+        turns: turns,
+        turnComplete: true,
+      });
+
+      // Báo hiệu đang xử lý
+      ws.send(
+        JSON.stringify({
+          type: "processing",
+          message: `Đang xử lý tin nhắn với ${message.totalFrames} frames...`,
+        })
+      );
+    } catch (error) {
+      console.error("❌ Error sending text with frame sequence:", error);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Lỗi khi gửi tin nhắn với frames: " + error.message,
         })
       );
     }
